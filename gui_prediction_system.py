@@ -8,39 +8,45 @@ import numpy as np
 # Load saved scaler
 scaler = joblib.load("scaler.pkl")
 
-# Define the ANN model structure
-class StepSizePredictor(nn.Module):
+# Define the ANN model with two outputs (step size + direction)
+class PDIPMPredictor(nn.Module):
     def __init__(self):
-        super(StepSizePredictor, self).__init__()
-        self.network = nn.Sequential(
+        super(PDIPMPredictor, self).__init__()
+        self.shared = nn.Sequential(
             nn.Linear(9, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
+            nn.ReLU()
         )
+        self.step_output = nn.Linear(32, 1)     # Step size regression head
+        self.dir_output = nn.Linear(32, 1)      # Direction classification head
 
     def forward(self, x):
-        return self.network(x)
+        shared = self.shared(x)
+        step_size = self.step_output(shared)
+        direction = torch.sigmoid(self.dir_output(shared))
+        return step_size, direction
 
-# Load the trained model
-model = StepSizePredictor()
-model.load_state_dict(torch.load("step_size_predictor.pth"))
+# Load trained model
+model = PDIPMPredictor()
+model.load_state_dict(torch.load("pdipm_predictor.pth"))
 model.eval()
 
-# Predict function
-def predict_step_size(features):
+# Prediction function for both outputs
+def predict(features):
     features_scaled = scaler.transform([features])
     input_tensor = torch.tensor(features_scaled, dtype=torch.float32)
     with torch.no_grad():
-        prediction = model(input_tensor).item()
-    return prediction
+        step_pred, dir_pred = model(input_tensor)
+    step_size = step_pred.item()
+    direction = 1 if dir_pred.item() >= 0.5 else 0  # Threshold at 0.5
+    return step_size, direction
 
-# GUI app
+# GUI app class
 class PredictorApp:
     def __init__(self, master):
         self.master = master
-        master.title("PD-IPM Step Size Predictor")
+        master.title("PD-IPM Step Size & Direction Predictor")
 
         # Feature labels and entry boxes
         self.entries = []
@@ -63,7 +69,7 @@ class PredictorApp:
             self.entries.append(entry)
 
         # Predict button
-        self.predict_button = tk.Button(master, text="Predict Step Size", command=self.run_prediction)
+        self.predict_button = tk.Button(master, text="Predict", command=self.run_prediction)
         self.predict_button.grid(row=10, columnspan=2, pady=10)
 
         # Result display
@@ -72,15 +78,14 @@ class PredictorApp:
 
     def run_prediction(self):
         try:
-            # Get input values from GUI
             inputs = [float(entry.get()) for entry in self.entries]
-            # Predict step size
-            step_size = predict_step_size(inputs)
-            self.result_label.config(text=f"Predicted Step Size: {step_size:.6f}")
+            step_size, direction = predict(inputs)
+            dir_str = "Forward (1)" if direction == 1 else "Backward (0)"
+            self.result_label.config(text=f"Predicted Step Size: {step_size:.6f}\nPredicted Direction: {dir_str}")
         except ValueError:
             messagebox.showerror("Invalid input", "Please enter valid numeric values in all fields.")
 
-# Launch the GUI
+# Launch the GUI app
 if __name__ == "__main__":
     root = tk.Tk()
     app = PredictorApp(root)
